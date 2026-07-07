@@ -337,12 +337,71 @@
       ];
     }
 
+    function formulaToCommand(formula, skill) {
+      const calculate = (expression) => {
+        const safe = expression.replace(/\s+/g, "");
+        if (!/^[\d+\-*/]+$/.test(safe)) return null;
+        try {
+          return Function(`"use strict"; return (${safe});`)();
+        } catch (error) {
+          return null;
+        }
+      };
+
+      return normalizeText(formula)
+        .replaceAll("【攻撃力】", "{攻撃力}")
+        .replaceAll("【魔力】", "{魔力}")
+        .replaceAll("【回復力】", "{回復力}")
+        .replaceAll("【STR】", "{STR}")
+        .replaceAll("【DEX】", "{DEX}")
+        .replaceAll("【POW】", "{POW}")
+        .replaceAll("【INT】", "{INT}")
+        .replaceAll("【ＳＴＲ】", "{STR}")
+        .replaceAll("【ＤＥＸ】", "{DEX}")
+        .replaceAll("【ＰＯＷ】", "{POW}")
+        .replaceAll("【ＩＮＴ】", "{INT}")
+        .replaceAll("【STR基本値】", "{STR基本値}")
+        .replaceAll("【DEX基本値】", "{DEX基本値}")
+        .replaceAll("【POW基本値】", "{POW基本値}")
+        .replaceAll("【INT基本値】", "{INT基本値}")
+        .replaceAll("【ＳＴＲ基本値】", "{STR基本値}")
+        .replaceAll("【ＤＥＸ基本値】", "{DEX基本値}")
+        .replaceAll("【ＰＯＷ基本値】", "{POW基本値}")
+        .replaceAll("【ＩＮＴ基本値】", "{INT基本値}")
+        .replaceAll("×", "*")
+        .replace(/\bSR\b/g, String(skill.skill_rank ?? 0))
+        .replace(/\bCR\b/g, "{CR}")
+        .replace(/[（(]([^（）(){}]+)[）)]D/g, (all, expression) => {
+          const value = calculate(expression);
+          return Number.isFinite(value) ? `${value}D` : all;
+        })
+        .replace(/[（）()]/g, "")
+        .replace(/\s+/g, "")
+        .replace(/(\d+)D\b/g, "$1D6");
+    }
+
+    function extraDamageCommands(skill) {
+      const tags = (skill.tags || []).map(normalizeText);
+      if (!tags.some((tag) => tag.includes("攻撃"))) return [];
+
+      const text = normalizeText(skill.function);
+      const commands = [];
+      const damagePattern = /\[([^\]]+)\](?:点)?(?:の)?(物理|魔法|直接|貫通)?ダメージ/g;
+      let match;
+
+      while ((match = damagePattern.exec(text)) !== null) {
+        commands.push(`${formulaToCommand(match[1], skill)} ${normalizeText(skill.name)}${match[2] ? `、${match[2]}ダメージ` : "ダメージ"}`);
+      }
+
+      return commands;
+    }
+
     function commandsFor(pc) {
       const byTiming = new Map(timingOrder.map((timing) => [timing, []]));
       (pc.skills || []).forEach((skill) => {
         const timing = normalizeText(skill.timing || "その他");
         if (!byTiming.has(timing)) byTiming.set(timing, []);
-        byTiming.get(timing).push(skillLine(skill), ...extraHealCommands(skill, pc), "");
+        byTiming.get(timing).push(skillLine(skill), ...extraHealCommands(skill, pc), ...extraDamageCommands(skill), "");
       });
 
       const equipped = [pc.hand1, pc.hand2, pc.armor, pc.support_item1, pc.support_item2, pc.support_item3, pc.bag]
@@ -452,13 +511,20 @@
           status: [
             { label: "HP", value: Number(pc.max_hitpoint || 0), max: Number(pc.max_hitpoint || 0) },
             { label: "因果力", value: Number(pc.effect || 0), max: Number(pc.effect || 0) },
-            { label: "ヘイト", value: 0, max: 0 }
+            { label: "ヘイト", value: 0, max: 0 },
+            { label: "疲労", value: 0, max: 0 },
+            { label: "障壁", value: 0, max: 0 }
           ],
           params: [
             { label: "STR", value: String(pc.str_value ?? 0) },
             { label: "DEX", value: String(pc.dex_value ?? 0) },
             { label: "POW", value: String(pc.pow_value ?? 0) },
-            { label: "INT", value: String(pc.int_value ?? 0) }
+            { label: "INT", value: String(pc.int_value ?? 0) },
+            { label: "攻撃力", value: String(pc.physical_attack ?? 0) },
+            { label: "魔力", value: String(pc.magic_attack ?? 0) },
+            { label: "回復力", value: String(pc.heal_power ?? 0) },
+            { label: "物理防御力", value: String(pc.physical_defense ?? 0) },
+            { label: "魔法防御力", value: String(pc.magic_defense ?? 0) }
           ],
           commands: commandsFor(pc)
         }
@@ -470,6 +536,15 @@
       const proxyJson = await proxyResponse.json().catch(() => null);
       if (proxyResponse.ok) {
         return proxyJson;
+      }
+
+      try {
+        const localResponse = await fetch(`./${encodeURIComponent(id)}.json`);
+        if (localResponse.ok) {
+          return await localResponse.json();
+        }
+      } catch (error) {
+        // Continue to the official API fallback below.
       }
 
       try {
